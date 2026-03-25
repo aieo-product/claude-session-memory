@@ -1,0 +1,17 @@
+{
+  "name": "claude-session-memory",
+  "version": "1.0.0",
+  "description": "Claude Code Plugin: SQLite-based session persistence — auto-log all sessions, inject past context on startup",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "scripts": {
+    "db:init": "bun scripts/db.ts",
+    "db:status": "bun scripts/cli.ts status",
+    "db:sessions": "bun scripts/cli.ts sessions",
+    "db:decisions": "bun scripts/cli.ts decisions",
+    "db:query": "bun scripts/cli.ts query"
+  }
+}
