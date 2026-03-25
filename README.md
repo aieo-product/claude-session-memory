@@ -15,12 +15,23 @@
 
 ## Install
 
+### Claude Code Plugin（推奨）
+
 ```bash
-# 1. marketplace に追加
+# 1. マーケットプレイスとして追加
 /plugin marketplace add aieo-product/claude-session-memory
 
-# 2. プラグインをインストール
-/plugin install session-memory@aieo-product
+# 2. インストール
+/plugin install claude-session-memory@aieo-product
+```
+
+### 手動インストール
+
+```bash
+# 1. クローン
+git clone https://github.com/aieo-product/claude-session-memory.git ~/.claude/session-memory-plugin
+
+# 2. hooks を ~/.claude/settings.json に追加（後述の Configuration 参照）
 ```
 
 > **前提条件**: [bun](https://bun.sh) がインストールされていること
@@ -74,20 +85,23 @@ DB 場所: `~/.claude/session-memory/memory.db`
 ## CLI
 
 ```bash
+# プラグインパスを変数に設定（インストール方法に応じて変更）
+PLUGIN_PATH=~/.claude/plugins/cache/aieo-product/claude-session-memory/*/
+
 # DB 統計
-bun ~/.claude/plugins/cache/aieo-product/session-memory/*/scripts/cli.ts status
+bun $PLUGIN_PATH/scripts/cli.ts status
 
 # セッション一覧
-bun <plugin-path>/scripts/cli.ts sessions
+bun $PLUGIN_PATH/scripts/cli.ts sessions
 
 # 決定一覧
-bun <plugin-path>/scripts/cli.ts decisions
+bun $PLUGIN_PATH/scripts/cli.ts decisions
 
 # 直接 SQL クエリ
-bun <plugin-path>/scripts/cli.ts query "SELECT * FROM decisions WHERE category='architecture'"
+bun $PLUGIN_PATH/scripts/cli.ts query "SELECT * FROM decisions WHERE category='architecture'"
 
 # transcript 手動取り込み
-bun <plugin-path>/scripts/cli.ts ingest <file.jsonl>
+bun $PLUGIN_PATH/scripts/cli.ts ingest <file.jsonl>
 ```
 
 ## Configuration
@@ -127,23 +141,24 @@ bun <plugin-path>/scripts/cli.ts ingest <file.jsonl>
 ```
 ~/.claude/
 ├── session-memory/
-│   ├── memory.db          ← SQLite (WAL mode)
-│   └── config.json        ← Optional config
-└── plugins/cache/aieo-product/session-memory/
-    ├── hooks/hooks.json   ← Hook definitions
-    ├── scripts/
-    │   ├── db.ts          ← DB connection + schema
-    │   ├── cli.ts         ← CLI tool
-    │   ├── hooks/
-    │   │   ├── session-start.ts
-    │   │   ├── session-stop.ts
-    │   │   └── prompt-submit.ts
-    │   └── lib/
-    │       ├── config.ts
-    │       ├── memory-injector.ts
-    │       ├── transcript-parser.ts
-    │       └── decision-extractor.ts
-    └── package.json
+│   ├── memory.db        ← SQLite (WAL mode)
+│   └── config.json      ← Optional config
+│
+claude-session-memory/     ← This repo (plugin root)
+├── hooks/hooks.json       ← Hook definitions
+├── package.json
+└── scripts/
+    ├── db.ts              ← DB connection + schema
+    ├── cli.ts             ← CLI tool
+    ├── hooks/
+    │   ├── session-start.ts
+    │   ├── session-stop.ts
+    │   └── prompt-submit.ts
+    └── lib/
+        ├── config.ts
+        ├── memory-injector.ts
+        ├── transcript-parser.ts
+        └── decision-extractor.ts
 ```
 
 ## Inspired By
