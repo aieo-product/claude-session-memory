@@ -138,28 +138,158 @@ bun $PLUGIN_PATH/scripts/cli.ts ingest <file.jsonl>
 
 ## Architecture
 
+### System Overview
+
 ```
-~/.claude/
-├── session-memory/
-│   ├── memory.db        ← SQLite (WAL mode)
-│   └── config.json      ← Optional config
-│
-claude-session-memory/     ← This repo (plugin root)
-├── hooks/hooks.json       ← Hook definitions
+Claude Code Session
+  │
+  ├─ [SessionStart]  ←── Hook (5s timeout)
+  │   ├─ INSERT session record (project, branch, timestamp)
+  │   ├─ SELECT past context (decisions, memory_blocks, last summary)
+  │   └─ stdout → XML context injection (~500-1500 tokens)
+  │
+  ├─ [UserPromptSubmit]  ←── Hook (10s timeout)
+  │   ├─ SELECT new memory_blocks since session start
+  │   └─ stdout → diff XML (0-200 tokens, 0 if no changes)
+  │
+  └─ [Stop]  ←── Hook (120s, async)
+      ├─ Stream-parse transcript JSONL
+      ├─ INSERT messages (batch, max 1000/session)
+      ├─ Extract decisions (regex: "decided to", "chose to", etc.)
+      ├─ Generate session summary
+      └─ UPDATE session (end_time, summary, counts)
+```
+
+### SQLite Schema (ER)
+
+```
+sessions 1──N messages
+    │
+    └── 1──N decisions
+
+memory_blocks (independent, scoped by project)
+```
+
+```sql
+-- sessions: one row per Claude Code session
+sessions (
+  id TEXT PRIMARY KEY,           -- session UUID
+  project TEXT NOT NULL,         -- working directory
+  project_name TEXT,             -- directory basename
+  git_branch TEXT,
+  start_time TEXT, end_time TEXT,
+  summary TEXT,                  -- auto-generated
+  message_count INTEGER, tool_use_count INTEGER
+)
+
+-- messages: parsed from transcript JSONL
+messages (
+  session_id TEXT REFERENCES sessions(id),
+  role TEXT,                     -- 'user' | 'assistant'
+  content TEXT,
+  tool_name TEXT, tool_input TEXT, tool_result TEXT,
+  timestamp TEXT
+)
+
+-- memory_blocks: persistent knowledge (key-value)
+memory_blocks (
+  key TEXT NOT NULL,
+  value TEXT NOT NULL,
+  project TEXT,                  -- NULL = global scope
+  category TEXT,                 -- 'general' | 'preference' | 'pattern' | 'decision'
+  source_session_id TEXT,
+  UNIQUE(key, project)
+)
+
+-- decisions: important choices extracted from assistant text
+decisions (
+  session_id TEXT REFERENCES sessions(id),
+  decision TEXT, context TEXT, rationale TEXT,
+  category TEXT,                 -- 'architecture' | 'config' | 'workflow'
+  resolved INTEGER DEFAULT 0    -- 0=open, 1=resolved
+)
+```
+
+**Indexes**: project, start_time, session_id, role, tool_name, timestamp, category, resolved
+
+### Context Injection Format
+
+**SessionStart (full injection)**:
+
+```xml
+<session-memory source="session-memory" session="..." injected_at="...">
+  <previous-session project="my-app" ended="...">
+    <summary>前回の要約</summary>
+  </previous-session>
+  <recent-decisions count="N">
+    <decision id="..." category="architecture" timestamp="...">決定内容</decision>
+  </recent-decisions>
+  <memory-blocks count="N">
+    <block key="..." category="..." updated="...">値</block>
+  </memory-blocks>
+</session-memory>
+```
+
+**UserPromptSubmit (diff only)**:
+
+```xml
+<session-memory-update since="...">
+  <new-memory key="..." category="...">新しい知識</new-memory>
+</session-memory-update>
+```
+
+### Decision Extraction
+
+Stop hook でアシスタントのテキストから正規表現で判断を自動抽出:
+
+| Pattern | Category |
+|---------|----------|
+| `decided to`, `chose to`, `going with`, `switching to` | architecture |
+| `configured`, `enabled`, `disabled`, `changed X to` | config |
+| `created issue`, `opened PR`, `merged` | workflow |
+
+### Technical Choices
+
+| Item | Choice | Reason |
+|------|--------|--------|
+| Runtime | bun | Built-in `bun:sqlite`, zero deps |
+| SQLite mode | WAL | Concurrent reads across sessions |
+| Injection | XML via stdout | Claude Code hook protocol |
+| Transcript parse | Streaming | Memory-efficient for large JSONL |
+
+### File Structure
+
+```
+claude-session-memory/          ← Plugin root
+├── hooks/hooks.json            ← Hook definitions (3 hooks)
 ├── package.json
 └── scripts/
-    ├── db.ts              ← DB connection + schema
-    ├── cli.ts             ← CLI tool
+    ├── db.ts                   ← SQLite connection + schema + WAL
+    ├── cli.ts                  ← CLI (status/sessions/decisions/query/ingest)
     ├── hooks/
-    │   ├── session-start.ts
-    │   ├── session-stop.ts
-    │   └── prompt-submit.ts
+    │   ├── session-start.ts    ← Create session + inject context
+    │   ├── session-stop.ts     ← Parse transcript + save to DB
+    │   └── prompt-submit.ts    ← Diff injection
     └── lib/
-        ├── config.ts
-        ├── memory-injector.ts
-        ├── transcript-parser.ts
-        └── decision-extractor.ts
+        ├── config.ts           ← Config loader (~/.claude/session-memory/config.json)
+        ├── memory-injector.ts  ← Build XML from DB queries
+        ├── transcript-parser.ts ← JSONL stream parser
+        └── decision-extractor.ts ← Regex-based decision extraction
+
+~/.claude/session-memory/       ← Runtime data (created automatically)
+├── memory.db                   ← SQLite DB (WAL mode)
+└── config.json                 ← Optional user config
 ```
+
+### Extensibility
+
+**Vector search (future)**: Add sqlite-vss or ChromaDB for semantic search:
+
+```sql
+CREATE VIRTUAL TABLE message_embeddings USING vss0 (embedding(1536));
+```
+
+**Cross-project shared brain**: `memory_blocks` with `project = NULL` are global scope, shared across all projects.
 
 ## Inspired By
 
